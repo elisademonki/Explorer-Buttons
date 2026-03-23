@@ -4,7 +4,7 @@ Ein Obsidian-Plugin für **Windows**, mit dem du in deinen Notizen klickbare But
 
 Das Plugin ist dafür gedacht, aus einem Markdown-Codeblock einen echten Button zu rendern. So kannst du zum Beispiel Projektordner, Export-Verzeichnisse, Download-Ordner oder dateibezogene Pfade direkt aus einer Notiz heraus öffnen.
 
-
+![[2026-03-23-explorer-button.png]]
 
 ---
 
