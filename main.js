@@ -1,4 +1,4 @@
-const { Plugin, Notice, PluginSettingTab, Setting, setIcon } = require('obsidian');
+const { Plugin, Notice, PluginSettingTab, Setting, setIcon, MarkdownView } = require('obsidian');
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
@@ -10,7 +10,9 @@ const DEFAULT_SETTINGS = {
   defaultStyle: 'primary',
   defaultIcon: 'folder-open',
   showPathByDefault: false,
-  openMode: 'auto'
+  openMode: 'auto',
+  showRibbonInsertButton: true,
+  useClipboardForInsertedPath: true
 };
 
 module.exports = class ExplorerButtonsPlugin extends Plugin {
@@ -18,6 +20,7 @@ module.exports = class ExplorerButtonsPlugin extends Plugin {
     await this.loadSettings();
 
     this.addSettingTab(new ExplorerButtonsSettingTab(this.app, this));
+    this.refreshRibbonInsertButton();
 
     this.registerMarkdownCodeBlockProcessor('explorer-button', (source, el, ctx) => {
       this.renderExplorerButton(source, el, ctx);
@@ -25,6 +28,14 @@ module.exports = class ExplorerButtonsPlugin extends Plugin {
 
     this.registerMarkdownCodeBlockProcessor('explorer-buttons', (source, el, ctx) => {
       this.renderExplorerButton(source, el, ctx);
+    });
+
+    this.addCommand({
+      id: 'insert-explorer-button-codeblock',
+      name: 'Explorer-Button-Codeblock einfügen',
+      editorCallback: async (editor) => {
+        await this.insertExplorerButtonCodeBlock(editor);
+      }
     });
 
     this.addCommand({
@@ -46,7 +57,7 @@ module.exports = class ExplorerButtonsPlugin extends Plugin {
   }
 
   onunload() {
-    // nothing to clean up
+    this.removeRibbonInsertButton();
   }
 
   async loadSettings() {
@@ -55,6 +66,141 @@ module.exports = class ExplorerButtonsPlugin extends Plugin {
 
   async saveSettings() {
     await this.saveData(this.settings);
+  }
+
+  refreshRibbonInsertButton() {
+    this.removeRibbonInsertButton();
+
+    if (!this.settings.showRibbonInsertButton) {
+      return;
+    }
+
+    this.ribbonInsertButtonEl = this.addRibbonIcon(
+      'folder-plus',
+      'Explorer-Button in aktuelle Notiz einfügen',
+      async () => {
+        await this.insertExplorerButtonCodeBlock();
+      }
+    );
+    this.ribbonInsertButtonEl.addClass('explorer-button-ribbon-insert');
+  }
+
+  removeRibbonInsertButton() {
+    if (this.ribbonInsertButtonEl) {
+      this.ribbonInsertButtonEl.remove();
+      this.ribbonInsertButtonEl = null;
+    }
+  }
+
+  getActiveMarkdownEditor() {
+    const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+    return view?.editor || null;
+  }
+
+  async insertExplorerButtonCodeBlock(editor = null) {
+    const targetEditor = editor || this.getActiveMarkdownEditor();
+
+    if (!targetEditor) {
+      new Notice('Explorer Buttons: Keine aktive Markdown-Notiz zum Einfügen gefunden.');
+      return;
+    }
+
+    let clipboardPath = '';
+    if (this.settings.useClipboardForInsertedPath) {
+      clipboardPath = await this.readClipboardText();
+    }
+
+    const normalizedPath = this.normalizeClipboardPath(clipboardPath);
+    const block = this.buildExplorerButtonCodeBlock(normalizedPath);
+    const insertionText = this.prepareInsertionText(targetEditor, block);
+
+    targetEditor.replaceSelection(insertionText);
+
+    if (this.settings.useClipboardForInsertedPath && normalizedPath) {
+      new Notice('Explorer-Button mit Pfad aus der Zwischenablage eingefügt.');
+    } else if (this.settings.useClipboardForInsertedPath) {
+      new Notice('Explorer-Button eingefügt. Die Zwischenablage war leer oder nicht lesbar.');
+    } else {
+      new Notice('Explorer-Button eingefügt.');
+    }
+  }
+
+  async readClipboardText() {
+    try {
+      if (navigator?.clipboard?.readText) {
+        return await navigator.clipboard.readText();
+      }
+    } catch (error) {
+      console.warn('[Explorer Buttons] Clipboard read failed.', error);
+    }
+
+    return '';
+  }
+
+  normalizeClipboardPath(value) {
+    let text = String(value || '').trim();
+
+    if (!text) {
+      return '';
+    }
+
+    const firstNonEmptyLine = text.split(/\r?\n/).map((line) => line.trim()).find(Boolean);
+    text = firstNonEmptyLine || text;
+    text = this.stripWrappingQuotes(text);
+
+    if (/^file:\/\//i.test(text)) {
+      try {
+        const url = new URL(text);
+        text = decodeURIComponent(url.pathname || '');
+
+        if (process.platform === 'win32') {
+          text = text.replace(/^\/([A-Za-z]:)/, '$1').replace(/\//g, '\\');
+        }
+      } catch (error) {
+        console.warn('[Explorer Buttons] Could not normalize file URL from clipboard.', error);
+      }
+    }
+
+    return text.trim();
+  }
+
+  buildExplorerButtonCodeBlock(rawPath = '') {
+    const label = (this.settings.defaultLabel || '').trim() || DEFAULT_SETTINGS.defaultLabel;
+    const style = this.normalizeStyle(this.settings.defaultStyle);
+    const icon = (this.settings.defaultIcon || '').trim() || DEFAULT_SETTINGS.defaultIcon;
+    const showPath = this.settings.showPathByDefault ? 'true' : 'false';
+    const codePath = rawPath || '';
+
+    return [
+      '```explorer-button',
+      `path: ${codePath}`,
+      `label: ${label}`,
+      `style: ${style}`,
+      `showPath: ${showPath}`,
+      `icon: ${icon === 'none' ? 'none' : icon}`,
+      '```'
+    ].join('\n');
+  }
+
+  prepareInsertionText(editor, block) {
+    let prefix = '';
+    let suffix = '\n';
+
+    try {
+      const selection = editor.getSelection?.() || '';
+      const cursor = editor.getCursor?.();
+
+      if (!selection && cursor) {
+        const currentLine = editor.getLine?.(cursor.line) || '';
+        if (currentLine.trim().length > 0) {
+          prefix = '\n\n';
+        }
+      }
+    } catch (error) {
+      console.warn('[Explorer Buttons] Could not inspect editor cursor.', error);
+    }
+
+    return `${prefix}${block}${suffix}`;
   }
 
   renderExplorerButton(source, el, ctx) {
@@ -336,7 +482,7 @@ class ExplorerButtonsSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName('Standard-Buttontext')
-      .setDesc('Wird verwendet, wenn im Codeblock kein eigenes Label gesetzt ist.')
+      .setDesc('Wird verwendet, wenn im Codeblock kein eigenes Label gesetzt ist und auch beim automatischen Einfügen.')
       .addText((text) =>
         text
           .setPlaceholder('Im Explorer öffnen')
@@ -388,6 +534,31 @@ class ExplorerButtonsSettingTab extends PluginSettingTab {
             this.plugin.settings.showPathByDefault = value;
             await this.plugin.saveSettings();
             this.display();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName('Schaltfläche links anzeigen')
+      .setDesc('Zeigt links in der Obsidian-Ribbon-Leiste eine Schaltfläche zum Einfügen eines Explorer-Button-Codeblocks.')
+      .addToggle((toggle) =>
+        toggle
+          .setValue(this.plugin.settings.showRibbonInsertButton)
+          .onChange(async (value) => {
+            this.plugin.settings.showRibbonInsertButton = value;
+            await this.plugin.saveSettings();
+            this.plugin.refreshRibbonInsertButton();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName('Zwischenablage als path verwenden')
+      .setDesc('Wenn aktiv, wird beim Einfügen über die linke Schaltfläche oder den Befehl der aktuelle Text aus der Zwischenablage direkt in path geschrieben.')
+      .addToggle((toggle) =>
+        toggle
+          .setValue(this.plugin.settings.useClipboardForInsertedPath)
+          .onChange(async (value) => {
+            this.plugin.settings.useClipboardForInsertedPath = value;
+            await this.plugin.saveSettings();
           })
       );
 
