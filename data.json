@@ -1,0 +1,9 @@
+{
+  "defaultLabel": "Im Explorer öffnen",
+  "defaultStyle": "primary",
+  "defaultIcon": "folder-open",
+  "showPathByDefault": true,
+  "openMode": "auto",
+  "showRibbonInsertButton": true,
+  "useClipboardForInsertedPath": true
+}
